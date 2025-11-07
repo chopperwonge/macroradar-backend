@@ -65,7 +65,9 @@ def get_series(series_id: str):
         conn.close()
 
 @app.post("/refresh/{series_id}")
+@app.get("/refresh/{series_id}")   # allow GET from browser too
 def refresh(series_id: str):
+
     """
     v1 stub so you can see the pipeline.
     Later, this will fetch from ONS/BoE and insert the real value.
