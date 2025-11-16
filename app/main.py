@@ -32,6 +32,15 @@ class SeriesResponse(BaseModel):
 def health():
     return {"ok": True}
 
+# Dummy values for testing different series
+DUMMY_VALUES = {
+    "cpi": 2.4,
+    "unemp": 4.3,
+    # You can add more later:
+    # "wages": 5.1,
+    # "gdp": 0.2,
+}
+
 @app.get("/series/{series_id}", response_model=SeriesResponse)
 def get_series(series_id: str):
     conn = get_conn()
@@ -80,20 +89,25 @@ def refresh(series_id: str):
             if not cur.fetchone():
                 raise HTTPException(status_code=404, detail="Series not found")
 
-            # insert a dummy data point for today if missing
+            # pick the correct dummy value for the series
+            dummy = DUMMY_VALUES.get(series_id, 2.4)
+
+            # check if data for today already exists
             cur.execute("""
                 select 1 from public.observations
                 where series_id=%s and date=%s
             """, (series_id, date.today()))
             exists = cur.fetchone()
 
+            # insert a dummy data point for today if missing
             if not exists:
                 cur.execute("""
                     insert into public.observations(series_id, date, value)
                     values (%s, %s, %s)
-                """, (series_id, date.today(), 2.4))
+                """, (series_id, date.today(), dummy))
                 conn.commit()
 
         return {"ok": True}
     finally:
         conn.close()
+
