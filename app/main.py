@@ -6,6 +6,7 @@ from pydantic import BaseModel
 import psycopg2
 import psycopg2.extras
 
+# Use your Supabase Postgres connection string as DATABASE_URL on Render
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 app = FastAPI(title="MacroRadar API", version="0.1")
@@ -54,7 +55,7 @@ def get_series(series_id: str):
                 limit 120
             """, (series_id,))
             obs = cur.fetchall()
-            recent = [{"date": r["date"], "value": float(r["value"])} for r in obs][::-1]
+            recent = [{"date": r["date"], "value": float(r["value"])} for r in obs][::-1]  # chronological order
             latest = recent[-1] if recent else None
 
             return {
