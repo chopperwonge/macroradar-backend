@@ -41,6 +41,52 @@ DUMMY_VALUES = {
     # "gdp": 0.2,
 }
 
+import requests
+from datetime import date
+from fastapi import HTTPException
+
+
+def fetch_world_bank_latest(indicator: str):
+    """
+    Fetch the latest non-null observation for a World Bank indicator.
+
+    Returns:
+        (obs_date, value) where obs_date is a Python date (1 Jan of the reported year).
+    """
+    url = f"https://api.worldbank.org/v2/country/GBR/indicator/{indicator}?format=json"
+    r = requests.get(url, timeout=15)
+
+    if r.status_code != 200:
+        raise HTTPException(status_code=500, detail=f"World Bank API error: {r.status_code}")
+
+    data = r.json()
+
+    # Structure: [metadata, [ { 'date': '2023', 'value': 3.2 }, ... ]]
+    if not isinstance(data, list) or len(data) < 2 or data[1] is None:
+        raise HTTPException(status_code=500, detail="Unexpected World Bank response format")
+
+    observations = data[1]
+
+    for item in observations:
+        if not isinstance(item, dict):
+            continue
+
+        year = item.get("date")
+        value = item.get("value")
+
+        if year is None or value is None:
+            continue
+
+        try:
+            year_int = int(year)
+            obs_date = date(year_int, 1, 1)
+        except Exception:
+            continue
+
+        return obs_date, float(value)
+
+    raise HTTPException(status_code=500, detail="No non-null World Bank observations found")
+
 @app.get("/series/{series_id}", response_model=SeriesResponse)
 def get_series(series_id: str):
     conn = get_conn()
