@@ -6,19 +6,21 @@ from pydantic import BaseModel
 import psycopg2
 import psycopg2.extras
 
-# Use your Supabase Postgres connection string as DATABASE_URL on Render
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 app = FastAPI(title="MacroRadar API", version="0.1")
+
 
 def get_conn():
     if not DATABASE_URL:
         raise RuntimeError("DATABASE_URL env var not set")
     return psycopg2.connect(DATABASE_URL)
 
+
 class Observation(BaseModel):
     date: date
     value: float
+
 
 class SeriesResponse(BaseModel):
     id: str
@@ -28,64 +30,11 @@ class SeriesResponse(BaseModel):
     latest: Optional[Observation]
     recent: List[Observation]
 
+
 @app.get("/healthz")
 def health():
     return {"ok": True}
 
-# Dummy values for testing different series
-DUMMY_VALUES = {
-    "cpi": 2.4,
-    "unemp": 4.3,
-    # You can add more later:
-    # "wages": 5.1,
-    # "gdp": 0.2,
-}
-
-import requests
-from datetime import date
-from fastapi import HTTPException
-
-
-def fetch_world_bank_latest(indicator: str):
-    """
-    Fetch the latest non-null observation for a World Bank indicator.
-
-    Returns:
-        (obs_date, value) where obs_date is a Python date (1 Jan of the reported year).
-    """
-    url = f"https://api.worldbank.org/v2/country/GBR/indicator/{indicator}?format=json"
-    r = requests.get(url, timeout=15)
-
-    if r.status_code != 200:
-        raise HTTPException(status_code=500, detail=f"World Bank API error: {r.status_code}")
-
-    data = r.json()
-
-    # Structure: [metadata, [ { 'date': '2023', 'value': 3.2 }, ... ]]
-    if not isinstance(data, list) or len(data) < 2 or data[1] is None:
-        raise HTTPException(status_code=500, detail="Unexpected World Bank response format")
-
-    observations = data[1]
-
-    for item in observations:
-        if not isinstance(item, dict):
-            continue
-
-        year = item.get("date")
-        value = item.get("value")
-
-        if year is None or value is None:
-            continue
-
-        try:
-            year_int = int(year)
-            obs_date = date(year_int, 1, 1)
-        except Exception:
-            continue
-
-        return obs_date, float(value)
-
-    raise HTTPException(status_code=500, detail="No non-null World Bank observations found")
 
 @app.get("/series/{series_id}", response_model=SeriesResponse)
 def get_series(series_id: str):
@@ -105,7 +54,7 @@ def get_series(series_id: str):
                 limit 120
             """, (series_id,))
             obs = cur.fetchall()
-            recent = [{"date": r["date"], "value": float(r["value"])} for r in obs][::-1]  # chronological
+            recent = [{"date": r["date"], "value": float(r["value"])} for r in obs][::-1]
             latest = recent[-1] if recent else None
 
             return {
@@ -119,60 +68,17 @@ def get_series(series_id: str):
     finally:
         conn.close()
 
+
 @app.post("/refresh/{series_id}")
-@app.get("/refresh/{series_id}")   # allow GET from browser too
+@app.get("/refresh/{series_id}")
 def refresh(series_id: str):
-
     """
-    v1 stub so you can see the pipeline.
-    Later, this will fetch from ONS/BoE and insert the real value.
+    Manual Mode enabled:
+    No automatic data fetching is performed.
+    Please update the observations directly in Supabase.
     """
-    conn = get_conn()
-    try:
-        with conn.cursor() as cur:
-            # ensure the series exists
-            cur.execute("select 1 from public.series where id=%s", (series_id,))
-            if not cur.fetchone():
-                raise HTTPException(status_code=404, detail="Series not found")
-
-            # pick the correct dummy value for the series
-            dummy = DUMMY_VALUES.get(series_id, 2.4)
-
-            # check if data for today already exists
-            cur.execute("""
-                select 1 from public.observations
-                where series_id=%s and date=%s
-            """, (series_id, date.today()))
-            exists = cur.fetchone()
-
-            # insert a dummy data point for today if missing
-            if not exists:
-                cur.execute("""
-                    insert into public.observations(series_id, date, value)
-                    values (%s, %s, %s)
-                """, (series_id, date.today(), dummy))
-                conn.commit()
-
-        return {"ok": True}
-    finally:
-        conn.close()
-
-@app.get("/test/worldbank/cpi")
-def test_worldbank_cpi():
-    obs_date, value = fetch_world_bank_latest("FP.CPI.TOTL.ZG")
     return {
-        "indicator": "FP.CPI.TOTL.ZG",
-        "date": str(obs_date),
-        "value": value
+        "ok": True,
+        "mode": "manual",
+        "message": "Update data directly in Supabase (public.observations)."
     }
-
-
-@app.get("/test/worldbank/unemp")
-def test_worldbank_unemp():
-    obs_date, value = fetch_world_bank_latest("SL.UEM.TOTL.ZS")
-    return {
-        "indicator": "SL.UEM.TOTL.ZS",
-        "date": str(obs_date),
-        "value": value
-    }
-
