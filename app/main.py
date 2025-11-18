@@ -157,3 +157,22 @@ def refresh(series_id: str):
     finally:
         conn.close()
 
+@app.get("/test/worldbank/cpi")
+def test_worldbank_cpi():
+    obs_date, value = fetch_world_bank_latest("FP.CPI.TOTL.ZG")
+    return {
+        "indicator": "FP.CPI.TOTL.ZG",
+        "date": str(obs_date),
+        "value": value
+    }
+
+
+@app.get("/test/worldbank/unemp")
+def test_worldbank_unemp():
+    obs_date, value = fetch_world_bank_latest("SL.UEM.TOTL.ZS")
+    return {
+        "indicator": "SL.UEM.TOTL.ZS",
+        "date": str(obs_date),
+        "value": value
+    }
+
