@@ -37,26 +37,37 @@ def health():
     return {"ok": True}
 
 
-@app.get("/series/{series_id}", response_model=SeriesResponse)
+@app.get("/series/{series_id}")
 def get_series(series_id: str):
     conn = get_conn()
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
-            cur.execute("select id,title,source,unit from public.series where id=%s", (series_id,))
+
+            # --- Fetch series metadata ---
+            cur.execute("""
+                select id, title, source, unit 
+                from public.series 
+                where id=%s
+            """, (series_id,))
             row = cur.fetchone()
             if not row:
                 raise HTTPException(status_code=404, detail="Series not found")
 
+            # --- Fetch full historical series (ascending order) ---
             cur.execute("""
                 select date, value
                 from public.observations
                 where series_id=%s
-                order by date desc
-                limit 120
+                order by date asc
             """, (series_id,))
-            obs = cur.fetchall()
-            recent = [{"date": r["date"], "value": float(r["value"])} for r in obs][::-1]  # chronological order
-            latest = recent[-1] if recent else None
+            full_rows = cur.fetchall()
+            full = [{"date": r["date"], "value": float(r["value"])} for r in full_rows]
+
+            # --- latest ---
+            latest = full[-1] if full else None
+
+            # --- recent (last 120 months) ---
+            recent = full[-120:] if len(full) > 120 else full
 
             return {
                 "id": row["id"],
@@ -64,11 +75,12 @@ def get_series(series_id: str):
                 "source": row["source"],
                 "unit": row["unit"],
                 "latest": latest,
-                "recent": recent
+                "recent": recent,
+                "full": full     # 🆕 added full history
             }
+
     finally:
         conn.close()
-
 
 @app.post("/refresh/{series_id}")
 @app.get("/refresh/{series_id}")
