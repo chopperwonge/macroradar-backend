@@ -53,6 +53,15 @@ def get_series(series_id: str):
             if not row:
                 raise HTTPException(status_code=404, detail="Series not found")
 
+            # --- Fetch description from indicators table ---
+            cur.execute("""
+                select description
+                from public.indicators
+                where id=%s
+            """, (series_id,))
+            desc_row = cur.fetchone()
+            description = desc_row["description"] if desc_row else None
+
             # --- Fetch full historical series (ascending order) ---
             cur.execute("""
                 select date, value
@@ -76,11 +85,13 @@ def get_series(series_id: str):
                 "unit": row["unit"],
                 "latest": latest,
                 "recent": recent,
-                "full": full     # 🆕 added full history
+                "full": full,
+                "description": description  # ⭐ added field
             }
 
     finally:
         conn.close()
+
 
 @app.post("/refresh/{series_id}")
 @app.get("/refresh/{series_id}")
