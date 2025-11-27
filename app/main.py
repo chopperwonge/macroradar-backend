@@ -9,7 +9,7 @@ import psycopg2.extras
 # Use your Supabase Postgres connection string as DATABASE_URL on Render
 DATABASE_URL = os.getenv("DATABASE_URL")
 
-app = FastAPI(title="MacroRadar API", version="0.1")
+app = FastAPI(title="MacroRadar API", version="0.2")
 
 
 def get_conn():
@@ -43,26 +43,49 @@ def get_series(series_id: str):
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
 
-            # --- Fetch series metadata ---
+            # --- Fetch series metadata (title, unit, source) ---
             cur.execute("""
-                select id, title, source, unit 
-                from public.series 
+                select id, title, source, unit
+                from public.series
                 where id=%s
             """, (series_id,))
             row = cur.fetchone()
+
             if not row:
                 raise HTTPException(status_code=404, detail="Series not found")
 
-            # --- Fetch description from indicators table ---
+            # --- Fetch extended metadata from indicator_metadata ---
             cur.execute("""
-                select description
-                from public.indicators
+                select 
+                    category,
+                    description,
+                    frequency,
+                    unit_display,
+                    source_url,
+                    methodology_url,
+                    release_schedule,
+                    country,
+                    display_priority
+                from public.indicator_metadata
                 where id=%s
             """, (series_id,))
-            desc_row = cur.fetchone()
-            description = desc_row["description"] if desc_row else None
+            meta = cur.fetchone()
 
-            # --- Fetch full historical series (ascending order) ---
+            metadata = None
+            if meta:
+                metadata = {
+                    "category": meta["category"],
+                    "description": meta["description"],
+                    "frequency": meta["frequency"],
+                    "unit_display": meta["unit_display"],
+                    "source_url": meta["source_url"],
+                    "methodology_url": meta["methodology_url"],
+                    "release_schedule": meta["release_schedule"],
+                    "country": meta["country"],
+                    "display_priority": meta["display_priority"],
+                }
+
+            # --- Fetch full history ---
             cur.execute("""
                 select date, value
                 from public.observations
@@ -70,12 +93,13 @@ def get_series(series_id: str):
                 order by date asc
             """, (series_id,))
             full_rows = cur.fetchall()
-            full = [{"date": r["date"], "value": float(r["value"])} for r in full_rows]
 
-            # --- latest ---
+            full = [
+                {"date": r["date"], "value": float(r["value"])}
+                for r in full_rows
+            ]
+
             latest = full[-1] if full else None
-
-            # --- recent (last 120 months) ---
             recent = full[-120:] if len(full) > 120 else full
 
             return {
@@ -86,7 +110,7 @@ def get_series(series_id: str):
                 "latest": latest,
                 "recent": recent,
                 "full": full,
-                "description": description  # ⭐ added field
+                "metadata": metadata,     # ⭐ NEW FIELD
             }
 
     finally:
@@ -96,11 +120,6 @@ def get_series(series_id: str):
 @app.post("/refresh/{series_id}")
 @app.get("/refresh/{series_id}")
 def refresh(series_id: str):
-    """
-    Manual Mode enabled:
-    No automatic data fetching is performed.
-    Please update the observations directly in Supabase.
-    """
     return {
         "ok": True,
         "mode": "manual",
