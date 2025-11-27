@@ -6,10 +6,10 @@ from pydantic import BaseModel
 import psycopg2
 import psycopg2.extras
 
-# Use your Supabase Postgres connection string as DATABASE_URL on Render
+# Render / Supabase connection
 DATABASE_URL = os.getenv("DATABASE_URL")
 
-app = FastAPI(title="MacroRadar API", version="0.2")
+app = FastAPI(title="MacroBiscuit API", version="0.3")
 
 
 def get_conn():
@@ -18,24 +18,27 @@ def get_conn():
     return psycopg2.connect(DATABASE_URL)
 
 
+# ---------------------------------------------------------
+# Models
+# ---------------------------------------------------------
+
 class Observation(BaseModel):
     date: date
     value: float
 
 
-class SeriesResponse(BaseModel):
-    id: str
-    title: str
-    unit: str
-    source: str
-    latest: Optional[Observation]
-    recent: List[Observation]
-
+# ---------------------------------------------------------
+# Healthcheck
+# ---------------------------------------------------------
 
 @app.get("/healthz")
 def health():
     return {"ok": True}
 
+
+# ---------------------------------------------------------
+# Get single indicator with full timeseries
+# ---------------------------------------------------------
 
 @app.get("/series/{series_id}")
 def get_series(series_id: str):
@@ -43,20 +46,20 @@ def get_series(series_id: str):
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
 
-            # --- Fetch series metadata (title, unit, source) ---
+            # --- Base metadata ---
             cur.execute("""
-                select id, title, source, unit
-                from public.series
-                where id=%s
+                SELECT id, title, source, unit
+                FROM public.series
+                WHERE id = %s
             """, (series_id,))
             row = cur.fetchone()
 
             if not row:
                 raise HTTPException(status_code=404, detail="Series not found")
 
-            # --- Fetch extended metadata from indicator_metadata ---
+            # --- Extended metadata ---
             cur.execute("""
-                select 
+                SELECT 
                     category,
                     description,
                     frequency,
@@ -66,38 +69,25 @@ def get_series(series_id: str):
                     release_schedule,
                     country,
                     display_priority
-                from public.indicator_metadata
-                where id=%s
+                FROM public.indicator_metadata
+                WHERE id = %s
             """, (series_id,))
             meta = cur.fetchone()
 
             metadata = None
             if meta:
-                metadata = {
-                    "category": meta["category"],
-                    "description": meta["description"],
-                    "frequency": meta["frequency"],
-                    "unit_display": meta["unit_display"],
-                    "source_url": meta["source_url"],
-                    "methodology_url": meta["methodology_url"],
-                    "release_schedule": meta["release_schedule"],
-                    "country": meta["country"],
-                    "display_priority": meta["display_priority"],
-                }
+                metadata = dict(meta)
 
-            # --- Fetch full history ---
+            # --- Full timeseries ---
             cur.execute("""
-                select date, value
-                from public.observations
-                where series_id=%s
-                order by date asc
+                SELECT date, value
+                FROM public.observations
+                WHERE series_id = %s
+                ORDER BY date ASC
             """, (series_id,))
             full_rows = cur.fetchall()
 
-            full = [
-                {"date": r["date"], "value": float(r["value"])}
-                for r in full_rows
-            ]
+            full = [{"date": r["date"], "value": float(r["value"])} for r in full_rows]
 
             latest = full[-1] if full else None
             recent = full[-120:] if len(full) > 120 else full
@@ -110,15 +100,75 @@ def get_series(series_id: str):
                 "latest": latest,
                 "recent": recent,
                 "full": full,
-                "metadata": metadata,     # ⭐ NEW FIELD
+                "metadata": metadata,
             }
 
     finally:
         conn.close()
 
 
-@app.post("/refresh/{series_id}")
+# ---------------------------------------------------------
+# NEW: List all indicators (frontend uses this)
+# ---------------------------------------------------------
+
+@app.get("/indicators")
+def list_indicators():
+    conn = get_conn()
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+
+            cur.execute("""
+                SELECT
+                    s.id,
+                    s.title,
+                    s.source,
+                    s.unit,
+                    m.category,
+                    m.description,
+                    m.frequency,
+                    m.unit_display,
+                    m.release_schedule,
+                    m.country,
+                    m.display_priority
+                FROM public.series s
+                LEFT JOIN public.indicator_metadata m
+                ON s.id = m.id
+                ORDER BY m.display_priority NULLS LAST, s.id
+            """)
+
+            rows = cur.fetchall()
+
+            # Always return list
+            result = []
+            for r in rows:
+                result.append({
+                    "id": r["id"],
+                    "title": r["title"],
+                    "source": r["source"],
+                    "unit": r["unit"],
+                    "metadata": {
+                        "category": r["category"],
+                        "description": r["description"],
+                        "frequency": r["frequency"],
+                        "unit_display": r["unit_display"],
+                        "release_schedule": r["release_schedule"],
+                        "country": r["country"],
+                        "display_priority": r["display_priority"],
+                    }
+                })
+
+            return result
+
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------
+# Manual refresh endpoint
+# ---------------------------------------------------------
+
 @app.get("/refresh/{series_id}")
+@app.post("/refresh/{series_id}")
 def refresh(series_id: str):
     return {
         "ok": True,
