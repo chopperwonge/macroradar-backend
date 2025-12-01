@@ -9,7 +9,7 @@ import psycopg2.extras
 # Render / Supabase connection
 DATABASE_URL = os.getenv("DATABASE_URL")
 
-app = FastAPI(title="MacroBiscuit API", version="0.3")
+app = FastAPI(title="MacroBiscuit API", version="0.4")
 
 
 def get_conn():
@@ -42,15 +42,11 @@ def health():
 
 @app.get("/ping")
 def ping():
-    """
-    Lightweight endpoint to keep the Render service from idling.
-    Used by the Next.js frontend every few minutes.
-    """
     return {"status": "alive"}
 
 
 # ---------------------------------------------------------
-# Get single indicator with full timeseries
+# Get single indicator with full metadata + timeseries
 # ---------------------------------------------------------
 
 @app.get("/series/{series_id}")
@@ -59,24 +55,28 @@ def get_series(series_id: str):
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
 
-            # --- Base metadata ---
+            # --- Fetch title from public.indicators ---
             cur.execute("""
-                SELECT id, title, source, unit
-                FROM public.series
+                SELECT title
+                FROM public.indicators
                 WHERE id = %s
             """, (series_id,))
-            row = cur.fetchone()
+            row_title = cur.fetchone()
 
-            if not row:
-                raise HTTPException(status_code=404, detail="Series not found")
+            if not row_title:
+                raise HTTPException(status_code=404, detail="Indicator not found")
 
-            # --- Extended metadata ---
+            title = row_title["title"]
+
+            # --- Extended metadata (includes source + unit + unit_display + decimals) ---
             cur.execute("""
                 SELECT 
                     category,
                     description,
                     frequency,
                     unit_display,
+                    unit,
+                    source,
                     source_url,
                     methodology_url,
                     release_schedule,
@@ -88,9 +88,7 @@ def get_series(series_id: str):
             """, (series_id,))
             meta = cur.fetchone()
 
-            metadata = None
-            if meta:
-                metadata = dict(meta)
+            metadata = dict(meta) if meta else {}
 
             # --- Full timeseries ---
             cur.execute("""
@@ -101,16 +99,19 @@ def get_series(series_id: str):
             """, (series_id,))
             full_rows = cur.fetchall()
 
-            full = [{"date": r["date"], "value": float(r["value"])} for r in full_rows]
+            full = [
+                {"date": r["date"], "value": float(r["value"])}
+                for r in full_rows
+            ]
 
             latest = full[-1] if full else None
             recent = full[-120:] if len(full) > 120 else full
 
             return {
-                "id": row["id"],
-                "title": row["title"],
-                "source": row["source"],
-                "unit": row["unit"],
+                "id": series_id,
+                "title": title,
+                "source": metadata.get("source"),
+                "unit": metadata.get("unit"),
                 "latest": latest,
                 "recent": recent,
                 "full": full,
@@ -122,7 +123,7 @@ def get_series(series_id: str):
 
 
 # ---------------------------------------------------------
-# NEW: List all indicators (frontend uses this)
+# List all indicators (for the indicators page)
 # ---------------------------------------------------------
 
 @app.get("/indicators")
@@ -133,10 +134,10 @@ def list_indicators():
 
             cur.execute("""
                 SELECT
-                    s.id,
-                    s.title,
-                    s.source,
-                    s.unit,
+                    i.id,
+                    i.title,
+                    m.source,
+                    m.unit,
                     m.category,
                     m.description,
                     m.frequency,
@@ -145,10 +146,10 @@ def list_indicators():
                     m.country,
                     m.display_priority,
                     m.decimal_places
-                FROM public.series s
+                FROM public.indicators i
                 LEFT JOIN public.indicator_metadata m
-                ON s.id = m.id
-                ORDER BY m.display_priority NULLS LAST, s.id
+                    ON i.id = m.id
+                ORDER BY m.display_priority NULLS LAST, i.id
             """)
 
             rows = cur.fetchall()
