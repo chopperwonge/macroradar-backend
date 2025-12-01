@@ -1,6 +1,5 @@
 import os
 from datetime import date
-from typing import List, Optional
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import psycopg2
@@ -28,7 +27,7 @@ class Observation(BaseModel):
 
 
 # ---------------------------------------------------------
-# Healthcheck
+# Health + Ping
 # ---------------------------------------------------------
 
 @app.get("/healthz")
@@ -36,17 +35,13 @@ def health():
     return {"ok": True}
 
 
-# ---------------------------------------------------------
-# NEW: Keep-alive ping endpoint for Render
-# ---------------------------------------------------------
-
 @app.get("/ping")
 def ping():
     return {"status": "alive"}
 
 
 # ---------------------------------------------------------
-# Get single indicator with full metadata + timeseries
+# Get single indicator (canonical)
 # ---------------------------------------------------------
 
 @app.get("/series/{series_id}")
@@ -55,27 +50,23 @@ def get_series(series_id: str):
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
 
-            # --- Fetch title from public.indicators ---
+            # --- Get title + description (canonical)
             cur.execute("""
-                SELECT title
+                SELECT title, description 
                 FROM public.indicators
                 WHERE id = %s
             """, (series_id,))
-            row_title = cur.fetchone()
+            base = cur.fetchone()
 
-            if not row_title:
+            if not base:
                 raise HTTPException(status_code=404, detail="Indicator not found")
 
-            title = row_title["title"]
-
-            # --- Extended metadata (includes source + unit + unit_display + decimals) ---
+            # --- Get metadata
             cur.execute("""
                 SELECT 
                     category,
-                    description,
                     frequency,
                     unit_display,
-                    unit,
                     source,
                     source_url,
                     methodology_url,
@@ -90,28 +81,25 @@ def get_series(series_id: str):
 
             metadata = dict(meta) if meta else {}
 
-            # --- Full timeseries ---
+            # --- Get full timeseries
             cur.execute("""
                 SELECT date, value
                 FROM public.observations
                 WHERE series_id = %s
                 ORDER BY date ASC
             """, (series_id,))
-            full_rows = cur.fetchall()
+            rows = cur.fetchall()
 
-            full = [
-                {"date": r["date"], "value": float(r["value"])}
-                for r in full_rows
-            ]
-
+            full = [{"date": r["date"], "value": float(r["value"])} for r in rows]
             latest = full[-1] if full else None
             recent = full[-120:] if len(full) > 120 else full
 
             return {
                 "id": series_id,
-                "title": title,
+                "title": base["title"],
+                "description": base["description"],
+                "unit": metadata.get("unit_display"),
                 "source": metadata.get("source"),
-                "unit": metadata.get("unit"),
                 "latest": latest,
                 "recent": recent,
                 "full": full,
@@ -123,7 +111,7 @@ def get_series(series_id: str):
 
 
 # ---------------------------------------------------------
-# List all indicators (for the indicators page)
+# List all indicators
 # ---------------------------------------------------------
 
 @app.get("/indicators")
@@ -133,22 +121,21 @@ def list_indicators():
         with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
 
             cur.execute("""
-                SELECT
+                SELECT 
                     i.id,
                     i.title,
-                    m.source,
-                    m.unit,
+                    i.description,
                     m.category,
-                    m.description,
                     m.frequency,
                     m.unit_display,
+                    m.source,
+                    m.source_url,
                     m.release_schedule,
                     m.country,
                     m.display_priority,
                     m.decimal_places
                 FROM public.indicators i
-                LEFT JOIN public.indicator_metadata m
-                    ON i.id = m.id
+                LEFT JOIN public.indicator_metadata m ON i.id = m.id
                 ORDER BY m.display_priority NULLS LAST, i.id
             """)
 
@@ -159,13 +146,13 @@ def list_indicators():
                 result.append({
                     "id": r["id"],
                     "title": r["title"],
-                    "source": r["source"],
-                    "unit": r["unit"],
+                    "description": r["description"],
                     "metadata": {
                         "category": r["category"],
-                        "description": r["description"],
                         "frequency": r["frequency"],
                         "unit_display": r["unit_display"],
+                        "source": r["source"],
+                        "source_url": r["source_url"],
                         "release_schedule": r["release_schedule"],
                         "country": r["country"],
                         "display_priority": r["display_priority"],
@@ -180,7 +167,7 @@ def list_indicators():
 
 
 # ---------------------------------------------------------
-# Manual refresh endpoint
+# Manual refresh
 # ---------------------------------------------------------
 
 @app.get("/refresh/{series_id}")
@@ -188,6 +175,5 @@ def list_indicators():
 def refresh(series_id: str):
     return {
         "ok": True,
-        "mode": "manual",
         "message": "Update data directly in Supabase (public.observations)."
     }
