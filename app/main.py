@@ -37,6 +37,19 @@ def health():
 
 
 # ---------------------------------------------------------
+# NEW: Keep-alive ping endpoint for Render
+# ---------------------------------------------------------
+
+@app.get("/ping")
+def ping():
+    """
+    Lightweight endpoint to keep the Render service from idling.
+    Used by the Next.js frontend every few minutes.
+    """
+    return {"status": "alive"}
+
+
+# ---------------------------------------------------------
 # Get single indicator with full timeseries
 # ---------------------------------------------------------
 
