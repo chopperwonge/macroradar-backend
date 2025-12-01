@@ -81,7 +81,8 @@ def get_series(series_id: str):
                     methodology_url,
                     release_schedule,
                     country,
-                    display_priority
+                    display_priority,
+                    decimal_places
                 FROM public.indicator_metadata
                 WHERE id = %s
             """, (series_id,))
@@ -142,7 +143,8 @@ def list_indicators():
                     m.unit_display,
                     m.release_schedule,
                     m.country,
-                    m.display_priority
+                    m.display_priority,
+                    m.decimal_places
                 FROM public.series s
                 LEFT JOIN public.indicator_metadata m
                 ON s.id = m.id
@@ -151,7 +153,6 @@ def list_indicators():
 
             rows = cur.fetchall()
 
-            # Always return list
             result = []
             for r in rows:
                 result.append({
@@ -167,6 +168,7 @@ def list_indicators():
                         "release_schedule": r["release_schedule"],
                         "country": r["country"],
                         "display_priority": r["display_priority"],
+                        "decimal_places": r["decimal_places"],
                     }
                 })
 
